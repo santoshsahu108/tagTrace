@@ -1,11 +1,13 @@
-# Packages the collector actually needs when running headless on Termux.
-# (The full GoogleFindMyTools requirements.txt also lists selenium,
-# undetected-chromedriver and frida, which are only for the first-time
-# Chrome login — do that once on a computer, not on the phone.)
+# Packages the collector needs on Termux (Android).
+# Install first with pkg (prebuilt, avoids slow source builds):
+#   pkg install python python-cryptography postgresql
+# Then: pip install -r termux/requirements-termux.txt
+#
+# selenium / undetected-chromedriver are imported but never launch Chrome on
+# the phone as long as Auth/secrets.json is present (login is done on a Mac/PC).
 requests>=2.32.3
 beautifulsoup4>=4.12.3
 gpsoauth>=1.1.1
-cryptography>=43.0.3
 pycryptodomex>=3.21.0
 ecdsa>=0.19.0
 pyscrypt>=1.6.2
@@ -15,3 +17,10 @@ httpx>=0.28.0
 h2>=4.1.0
 aiohttp>=3.11.8
 http_ece>=1.1.0
+selenium>=4.27.1
+undetected-chromedriver>=3.5.5
+setuptools>=75.6.0
+# Collector (database + config). psycopg2 builds against Termux's libpq.
+SQLAlchemy>=2.0,<3.0
+psycopg2>=2.9
+python-dotenv>=1.0

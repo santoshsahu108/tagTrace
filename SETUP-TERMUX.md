@@ -1,69 +1,112 @@
-# Standalone setup (phone only)
+# Run Tag Trace on the phone (Termux)
 
-Everything runs on the phone: the app, plus a small Python helper in Termux
-that fetches the tag and serves it to the app over localhost
-(`http://127.0.0.1:8020`). No PC stays involved after the one-time login.
+The collector runs in Termux on the phone, saves points to your Neon cloud
+database, and serves the app on `http://127.0.0.1:8020`. The Google sign-in
+needs Chrome, so it happens once on the Mac; the phone just reuses the token.
 
-## Why one step still needs a computer, once
+You need from the Mac (both are secret, never commit or share them):
+- `GoogleFindMyTools/Auth/secrets.json` (Google tokens)
+- `GoogleFindMyTools/.env` (Neon `DATABASE_URL` and settings)
 
-Signing in to Google the first time uses a Chrome window, which Termux can't
-run. So you do the sign-in **once on any computer with Chrome**, which creates a
-small `Auth/secrets.json` token file, and copy that file to the phone. After
-that the phone runs on its own.
+## 1. Install Termux
 
-## 1. One-time login (on a computer with Chrome)
+Install **Termux** and **Termux:API** from **F-Droid** (the Play Store build is
+outdated). Optional: **Termux:Boot** to start on boot.
 
-```
-git clone https://github.com/leonboe1/GoogleFindMyTools
-cd GoogleFindMyTools
-pip install -r requirements.txt
-python main.py        # a Chrome window opens — sign in to your Google account
-```
-
-This writes `Auth/secrets.json`. In Find Hub, set the network to
-**"With network in all areas"** so the tag updates even in quiet places.
-Copy `Auth/secrets.json` somewhere you can get it onto the phone (cloud drive,
-cable, etc.).
-
-## 2. On the phone (Termux)
-
-Install **Termux from F-Droid** (the Play Store build is too old), then:
+## 2. Install packages (in Termux)
 
 ```
-pkg update && pkg install python git rust binutils
-git clone https://github.com/leonboe1/GoogleFindMyTools
-cd GoogleFindMyTools
-pip install -r ~/storage/shared/.../task3/termux/requirements-termux.txt
+pkg update && pkg upgrade -y
+pkg install -y python git python-cryptography postgresql rust binutils termux-api
+termux-setup-storage            # allow access to Downloads; tap Allow
 ```
 
-(`rust`/`binutils` are there because a couple of packages compile from source
-on Android. If `pip` struggles with one, install it alone and retry.)
+`python-cryptography` is prebuilt; `postgresql` provides libpq for psycopg2;
+`rust`/`binutils` are for the few packages that build from source.
 
-Then put two files into this `GoogleFindMyTools` folder:
-- `collector.py` (from this project's `collector/` folder)
-- `Auth/secrets.json` (the token from step 1)
-
-Run it:
+## 3. Get the code
 
 ```
-cp /path/to/collector.py .
-python collector.py --tag "JioTag" --port 8020
+cd ~
+git clone https://github.com/santoshsahu108/tagTrace.git
+cd tagTrace
+pip install -r termux/requirements-termux.txt
 ```
 
-Leave that running. `termux/run.sh` in this project does the same and also takes
-a wake-lock so it keeps going with the screen off. To start it automatically on
-boot, install the Termux:Boot add-on and put `run.sh` in `~/.termux/boot/`.
+If one package fails to build, install it alone (`pip install <name>`) and
+re-run the line above.
 
-## 3. In the app
+## 4. Copy the two secret files from the Mac
 
-Open **Settings → Over Wi-Fi**, enter `http://127.0.0.1:8020`, tap **Test**,
-then **Save**. Tap **Sync now** on the home screen. That's it — tap any day for
-its trace.
+Move `secrets.json` and `.env` to the phone's **Downloads** folder (USB cable,
+or a private cloud drive), then in Termux:
 
-## If Termux fights the native builds
+```
+cp ~/storage/downloads/secrets.json ~/tagTrace/GoogleFindMyTools/Auth/secrets.json
+cp ~/storage/downloads/.env        ~/tagTrace/GoogleFindMyTools/.env
+chmod 600 ~/tagTrace/GoogleFindMyTools/Auth/secrets.json ~/tagTrace/GoogleFindMyTools/.env
+rm ~/storage/downloads/secrets.json ~/storage/downloads/.env    # other apps can read Downloads
+```
 
-`http_ece`, `cryptography` and `pyscrypt` compile from source on Android and can
-be stubborn. If you can't get them to build after a couple of tries, the same
-`collector.py` runs cleanly on any always-on computer or Raspberry Pi instead
-(see `README.md`), and the app reads it over your home Wi-Fi — same app, no code
-change.
+On a phone the collector only needs to listen locally. Edit `.env`
+(`nano ~/tagTrace/GoogleFindMyTools/.env`) and set:
+
+```
+HTTP_HOST=127.0.0.1
+GFMT_DIR=
+```
+
+(`GFMT_DIR` must be empty here; the Mac path does not exist on the phone.)
+
+## 5. First run
+
+```
+cd ~/tagTrace/GoogleFindMyTools
+python collector.py
+```
+
+Expect `[db] connected, N points stored` and `Tracking 'Tag' every 300s`.
+Your login user already lives in Neon, so no `--add-user` is needed.
+
+**Stop the collector on the Mac** so two copies don't poll the same account.
+
+## 6. Keep it running
+
+```
+bash ~/tagTrace/termux/run.sh          # takes a wake-lock, runs the collector
+```
+
+In Android settings, set **Battery → Unrestricted** for Termux so it isn't
+killed with the screen off.
+
+Start on boot (needs Termux:Boot, opened once):
+
+```
+mkdir -p ~/.termux/boot
+cp ~/tagTrace/termux/run.sh ~/.termux/boot/tagtrace.sh
+chmod +x ~/.termux/boot/tagtrace.sh
+```
+
+## 7. In the app
+
+**Settings → Over Wi-Fi**: enter `http://127.0.0.1:8020`, log in with your
+user, tap **Test**, then **Save**, then **Sync now**.
+
+## Update later
+
+```
+cd ~/tagTrace && git pull && pip install -r termux/requirements-termux.txt
+```
+
+then restart the collector. `git pull` never touches your `.env` or
+`secrets.json` (both are gitignored).
+
+## Troubleshooting
+
+- `No module named ...`: run the `pip install -r` line from step 3 again.
+- `psycopg2` build fails: make sure `pkg install postgresql` ran, then
+  `pip install psycopg2`.
+- `Can't reach Postgres`: check the phone has internet and `DATABASE_URL` in
+  `.env` is the Neon one.
+- Google token errors: redo the login on the Mac (`python main.py`) and copy
+  the new `secrets.json` again.
