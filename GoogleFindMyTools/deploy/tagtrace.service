@@ -1,0 +1,29 @@
+# systemd unit for the Tag Trace collector.
+# Install: sudo cp tagtrace.service /etc/systemd/system/ && sudo systemctl enable --now tagtrace
+[Unit]
+Description=Tag Trace collector (Find Hub -> Postgres + HTTP API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tagtrace
+Group=tagtrace
+WorkingDirectory=/opt/tagtrace/GoogleFindMyTools
+# All configuration and secrets live here (chmod 600, owned by tagtrace).
+EnvironmentFile=/etc/tagtrace/tagtrace.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/tagtrace/GoogleFindMyTools/.venv/bin/python collector.py
+Restart=always
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/tagtrace
+ReadOnlyPaths=/opt/tagtrace
+
+[Install]
+WantedBy=multi-user.target

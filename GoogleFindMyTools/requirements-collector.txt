@@ -1,0 +1,4 @@
+# Tag Trace collector dependencies (in addition to GoogleFindMyTools' own).
+SQLAlchemy>=2.0,<3.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0

@@ -1,0 +1,24 @@
+# Caddy config: HTTPS (automatic Let's Encrypt), web UI + collector API.
+# Install: sudo cp Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# Replace tagtrace.example.com with your domain (its DNS A record -> this server).
+tagtrace.example.com {
+	encode gzip
+
+	# Collector API: https://<domain>/api/... -> 127.0.0.1:8020/...
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8020
+	}
+
+	# Built React web UI (web/dist copied here).
+	handle {
+		root * /var/www/tagtrace
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}

@@ -1,0 +1,27 @@
+name: tag_trace
+description: "Logs a JioTag 2's locations and maps each day's trace."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
+  path_provider: ^2.1.6
+  http: ^1.6.0
+  workmanager: ^0.10.10
+  shared_preferences: ^2.5.5
+  intl: ^0.20.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
