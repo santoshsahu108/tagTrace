@@ -23,12 +23,15 @@ _FIELDS = (Location.t, Location.lat, Location.lng, Location.acc, Location.src)
 
 def _as_point(row) -> dict:
     """Shape a (t, lat, lng, acc, src) row into the client-facing dict."""
+    # Unpack by position: SQLAlchemy 2's Row.t is a built-in (the typed-tuple
+    # view of the row), so ``row.t`` would return the whole row, not the column.
+    t, lat, lng, acc, src = row
     return {
-        "t": int(row.t),
-        "lat": row.lat,
-        "lng": row.lng,
-        "acc": float(row.acc) if row.acc is not None else 0.0,
-        "src": row.src or "",
+        "t": int(t),
+        "lat": lat,
+        "lng": lng,
+        "acc": float(acc) if acc is not None else 0.0,
+        "src": src or "",
     }
 
 
