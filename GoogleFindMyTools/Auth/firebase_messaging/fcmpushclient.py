@@ -402,12 +402,15 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
         salt_str: str,
         raw_data: bytes,
     ) -> bytes:
-        crypto_key = urlsafe_b64decode(crypto_key_str.encode("ascii"))
-        salt = urlsafe_b64decode(salt_str.encode("ascii"))
-        der_data_str = credentials["keys"]["private"]
-        der_data = urlsafe_b64decode(der_data_str.encode("ascii") + b"========")
-        secret_str = credentials["keys"]["secret"]
-        secret = urlsafe_b64decode(secret_str.encode("ascii") + b"========")
+        def b64(value: str) -> bytes:
+            # FCM now sends unpadded base64url; add exactly the padding needed.
+            value = value.strip().rstrip("=")
+            return urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+        crypto_key = b64(crypto_key_str)
+        salt = b64(salt_str)
+        der_data = b64(credentials["keys"]["private"])
+        secret = b64(credentials["keys"]["secret"])
         privkey = load_der_private_key(
             der_data, password=None, backend=default_backend()
         )
@@ -432,6 +435,14 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
             return ""
         raise RuntimeError(f"couldn't find in app_data {key}")
 
+    @staticmethod
+    def _header_param(header: str, name: str) -> str:
+        for part in header.replace(",", ";").split(";"):
+            key, _, value = part.strip().partition("=")
+            if key == name:
+                return value
+        raise RuntimeError(f"couldn't find {name}= in {header[:20]}...")
+
     def _handle_data_message(
         self,
         msg: DataMessageStanza,
@@ -449,8 +460,12 @@ class FcmPushClient:  # pylint:disable=too-many-instance-attributes
         ):
             # The deleted_messages message does not contain data.
             return
-        crypto_key = self._app_data_by_key(msg, "crypto-key")[3:]  # strip dh=
-        salt = self._app_data_by_key(msg, "encryption")[5:]  # strip salt=
+        # Headers look like "dh=...;p256ecdsa=..." / "salt=...": pick the named
+        # parameter instead of slicing, since Google now adds p256ecdsa.
+        crypto_key = self._header_param(
+            self._app_data_by_key(msg, "crypto-key"), "dh"
+        )
+        salt = self._header_param(self._app_data_by_key(msg, "encryption"), "salt")
         subtype = self._app_data_by_key(msg, "subtype")
         if TYPE_CHECKING:
             assert self.credentials
