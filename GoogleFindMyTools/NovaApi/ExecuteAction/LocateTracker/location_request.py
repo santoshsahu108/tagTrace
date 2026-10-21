@@ -4,6 +4,7 @@
 #
 
 import asyncio
+import os
 import time
 
 from Auth.fcm_receiver import FcmReceiver
@@ -46,13 +47,27 @@ def get_location_data_for_device(canonic_device_id, name):
             result = parse_device_update_protobuf(response)
             #print_device_update_protobuf(response)
 
-    fcm_token = FcmReceiver().register_for_location_updates(handle_location_response)
+    receiver = FcmReceiver()
+    fcm_token = receiver.register_for_location_updates(handle_location_response)
 
-    hex_payload = create_location_request(canonic_device_id, fcm_token, request_uuid)
-    nova_request(NOVA_ACTION_API_SCOPE, hex_payload)
+    try:
+        hex_payload = create_location_request(canonic_device_id, fcm_token, request_uuid)
+        nova_request(NOVA_ACTION_API_SCOPE, hex_payload)
 
-    while result is None:
-        time.sleep(0.1)
+        # The answer arrives as an FCM push. Don't wait forever if it never
+        # comes (e.g. another client is using the same FCM credentials).
+        timeout = float(os.environ.get("LOCATION_TIMEOUT", "120") or 120)
+        deadline = time.monotonic() + timeout
+        while result is None:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"no location response via FCM within {timeout:.0f}s"
+                )
+            time.sleep(0.1)
+    finally:
+        # One callback per request; don't let them pile up across polls.
+        if handle_location_response in receiver.location_update_callbacks:
+            receiver.location_update_callbacks.remove(handle_location_response)
 
     decrypt_location_response_locations(result)
 
