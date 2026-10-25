@@ -6,5 +6,6 @@
 set -e
 REPO="${TAGTRACE_DIR:-$HOME/tagTrace}"
 termux-wake-lock 2>/dev/null || true   # keep running with the screen off
+export DISPLAY="${DISPLAY:-:0}"         # Termux:X11, for Connect with Google
 cd "$REPO/GoogleFindMyTools"
 exec python collector.py

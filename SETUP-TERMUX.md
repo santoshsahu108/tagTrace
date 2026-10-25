@@ -110,3 +110,37 @@ then restart the collector. `git pull` never touches your `.env` or
   `.env` is the Neon one.
 - Google token errors: redo the login on the Mac (`python main.py`) and copy
   the new `secrets.json` again.
+
+## Connect with Google on the phone (Termux:X11 + Chromium)
+
+Needed only for the per-user **Connect with Google** button when the
+collector runs on the phone. Chrome opens in a Termux:X11 window on the
+phone, you sign in there, and the keys go straight into the database.
+Experimental: not yet tested on a phone.
+
+1. Install the **Termux:X11** app (APK from the termux/termux-x11 GitHub
+   releases page).
+2. In Termux:
+   ```
+   pkg install -y x11-repo
+   pkg install -y termux-x11-nightly chromium openbox
+   which chromium-browser chromedriver     # both must print a path
+   ```
+3. Start the display and a window manager (keep this running):
+   ```
+   termux-x11 :0 &
+   export DISPLAY=:0
+   openbox &
+   ```
+4. Start the collector **in the same Termux session** (so it has
+   `DISPLAY=:0`). On Termux the collector uses the system Chromium
+   automatically; on other machines set `CHROME_ATTACH=1`. Optional
+   overrides in `.env`: `CHROME_BINARY`, `CHROMEDRIVER_PATH`.
+5. Open the web page, log in, tap **Connect with Google**, then switch to the
+   **Termux:X11** app: Chromium shows the Google sign-in. Sign in, then sign
+   in again and unlock with your screen lock. Switch back to the browser tab;
+   it lists your trackers. Pick yours.
+
+If Chromium doesn't appear: check `echo $DISPLAY` prints `:0` in the
+collector's session and that the Termux:X11 app is open. If Google says the
+browser isn't secure, report it; the attach mode is meant to avoid that.

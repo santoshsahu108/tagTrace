@@ -2,11 +2,130 @@
 #  GoogleFindMyTools - A set of tools to interact with the Google Find My API
 #  Copyright © 2024 Leon Böttger. All rights reserved.
 #
-import undetected_chromedriver as uc
 import os
 import shutil
 import platform
 import time
+
+try:
+    import undetected_chromedriver as uc
+except ImportError:  # not needed in attach mode (e.g. Termux)
+    uc = None
+
+
+def _is_termux():
+    return "com.termux" in os.environ.get("PREFIX", "") or bool(os.environ.get("TERMUX_VERSION"))
+
+
+def _attach_mode():
+    """Launch the system Chromium ourselves and attach chromedriver to it.
+
+    Used on Termux (Android), where undetected_chromedriver's desktop driver
+    downloads can't run, or anywhere with CHROME_ATTACH=1. Because the browser
+    is started normally (not by chromedriver), sites don't see the automation
+    flag, which keeps Google's sign-in page usable.
+    """
+    value = os.environ.get("CHROME_ATTACH", "").strip().lower()
+    if value in ("1", "true", "yes"):
+        return True
+    if value in ("0", "false", "no"):
+        return False
+    return _is_termux()
+
+
+def _free_port():
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _create_attached_driver():
+    import subprocess
+    import tempfile
+    import urllib.request
+
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+
+    browser = (
+        os.environ.get("CHROME_BINARY", "").strip()
+        or shutil.which("chromium-browser")
+        or shutil.which("chromium")
+        or find_chrome()
+    )
+    driver_path = os.environ.get("CHROMEDRIVER_PATH", "").strip() or shutil.which("chromedriver")
+    if not browser:
+        raise Exception("[ChromeDriver] Chromium not found. On Termux: pkg install x11-repo && pkg install chromium")
+    if not driver_path:
+        raise Exception("[ChromeDriver] chromedriver not found. On Termux it comes with: pkg install chromium")
+
+    env = dict(os.environ)
+    env.setdefault("DISPLAY", ":0")  # Termux:X11 default display
+    port = _free_port()
+    profile = tempfile.mkdtemp(prefix="tagtrace-chrome-")
+    proc = subprocess.Popen(
+        [
+            browser,
+            f"--remote-debugging-port={port}",
+            "--remote-debugging-address=127.0.0.1",
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--start-maximized",
+            "about:blank",
+        ],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    deadline = time.time() + 60
+    while True:
+        if proc.poll() is not None:
+            shutil.rmtree(profile, ignore_errors=True)
+            raise Exception(
+                "[ChromeDriver] Chromium exited at start. Is a display running? "
+                "On Termux start Termux:X11 (termux-x11 :0) and set DISPLAY=:0."
+            )
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1).close()
+            break
+        except Exception:
+            if time.time() > deadline:
+                proc.kill()
+                shutil.rmtree(profile, ignore_errors=True)
+                raise Exception("[ChromeDriver] Chromium didn't open its debugging port.")
+            time.sleep(0.5)
+
+    options = webdriver.ChromeOptions()
+    options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+    driver = webdriver.Chrome(service=Service(driver_path), options=options)
+
+    # quit() on an attached driver leaves the browser open; close it too.
+    original_quit = driver.quit
+
+    def quit_all():
+        try:
+            original_quit()
+        except Exception:
+            pass  # already quit (GFMT flows call quit() more than once)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(10)
+                except Exception:
+                    proc.kill()
+            shutil.rmtree(profile, ignore_errors=True)
+
+    driver.quit = quit_all
+    print(f"[ChromeDriver] Started {os.path.basename(browser)} (attached).")
+    return driver
+
 
 def find_chrome():
     """Find Chrome executable using known paths and system commands."""
@@ -67,6 +186,8 @@ def _chrome_version_main():
 
 def create_driver():
     """Create a Chrome WebDriver with undetected_chromedriver."""
+    if _attach_mode():
+        return _create_attached_driver()
     try:
         # Optionally kill existing Chrome processes first. Off by default: it
         # would close the user's own browser when started from the web UI.
