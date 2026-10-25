@@ -45,17 +45,35 @@ def get_options():
     return chrome_options
 
 def _chrome_version_main():
-    # Pin chromedriver to a Chrome major version via CHROME_VERSION_MAIN (empty = auto).
+    # Chromedriver must match the installed Chrome's major version. Use
+    # CHROME_VERSION_MAIN if set, else ask the installed Chrome; None lets
+    # undetected_chromedriver pick (latest), which fails on older Chrome.
     value = os.environ.get("CHROME_VERSION_MAIN", "").strip()
-    return int(value) if value.isdigit() else None
+    if value.isdigit():
+        return int(value)
+    chrome = find_chrome()
+    if not chrome:
+        return None
+    try:
+        import re
+        import subprocess
+
+        out = subprocess.run([chrome, "--version"], capture_output=True, text=True, timeout=10).stdout
+        match = re.search(r"(\d+)\.\d+", out)
+        return int(match.group(1)) if match else None
+    except Exception:
+        return None
 
 
 def create_driver():
     """Create a Chrome WebDriver with undetected_chromedriver."""
     try:
-        # Kill any existing Chrome processes first
+        # Optionally kill existing Chrome processes first. Off by default: it
+        # would close the user's own browser when started from the web UI.
         try:
-            if platform.system() == "Windows":
+            if os.environ.get("CHROME_KILL_EXISTING", "").strip() != "1":
+                pass
+            elif platform.system() == "Windows":
                 os.system("taskkill /f /im chrome.exe >nul 2>&1")
             else:
                 os.system("pkill -f chrome")

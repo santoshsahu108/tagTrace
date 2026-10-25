@@ -26,7 +26,11 @@ SHARE_TTLS: dict[int, str] = {
 
 
 def create_share(
-    date_from: str, date_to: str, ttl_seconds: int, created_by: str | None = None
+    date_from: str,
+    date_to: str,
+    ttl_seconds: int,
+    created_by: str | None = None,
+    user_id: int | None = None,
 ) -> tuple[str, dt.datetime]:
     """Create a share link for a date range. Returns ``(token, expires_at)``.
 
@@ -46,6 +50,7 @@ def create_share(
                 date_from=date_from,
                 date_to=date_to,
                 created_by=created_by,
+                user_id=user_id,
                 expires_at=expires_at,
             )
         )
@@ -53,7 +58,7 @@ def create_share(
 
 
 def get_share(token: str | None) -> dict | None:
-    """A live (unexpired) share's ``{from, to, expires_at}``, else None."""
+    """A live (unexpired) share's ``{from, to, expires_at, user_id}``, else None."""
     if not token:
         return None
     now = dt.datetime.now(dt.timezone.utc)
@@ -66,4 +71,5 @@ def get_share(token: str | None) -> dict | None:
             "from": share.date_from,
             "to": share.date_to,
             "expires_at": share.expires_at.isoformat(),
+            "user_id": share.user_id,
         }

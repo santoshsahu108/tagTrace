@@ -12,7 +12,7 @@ import warnings
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, make_url, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, ProgrammingError, SAWarning
 from sqlalchemy.orm import Session, sessionmaker
@@ -61,9 +61,10 @@ def _create_database_if_missing() -> None:
     # inside a transaction, so use an AUTOCOMMIT connection.
     maint = create_engine(settings.maintenance_url(), isolation_level="AUTOCOMMIT")
     try:
+        name = make_url(settings.sqlalchemy_url).database or settings.pg_database
         with maint.connect() as conn:
-            conn.execute(text(f'CREATE DATABASE "{settings.pg_database}"'))
-        print(f"[db] created database {settings.pg_database!r}")
+            conn.execute(text(f'CREATE DATABASE "{name}"'))
+        print(f"[db] created database {name!r}")
     except ProgrammingError:
         pass  # a concurrent starter won the race; that's fine
     finally:
@@ -131,9 +132,45 @@ def _enable_spatial() -> None:
     print("[db] PostGIS ready: locations.geom (Point, 4326) + GIST index")
 
 
+def _migrate_user_scoping() -> None:
+    """Add per-user ownership to tables created before multi-user tags.
+
+    Idempotent: adds ``user_id`` / ``tag_config_id`` columns, swaps the global
+    (t, lat, lng) dedup constraint for a per-user one. Existing rows keep
+    ``user_id`` NULL until ``tag_configs.import_legacy`` assigns them an owner.
+    """
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE locations ADD COLUMN IF NOT EXISTS user_id BIGINT "
+            "REFERENCES users(id) ON DELETE CASCADE"
+        ))
+        conn.execute(text(
+            "ALTER TABLE locations ADD COLUMN IF NOT EXISTS tag_config_id BIGINT "
+            "REFERENCES tag_configs(id) ON DELETE SET NULL"
+        ))
+        conn.execute(text(
+            "ALTER TABLE tag_configs ADD COLUMN IF NOT EXISTS google_email TEXT"
+        ))
+        conn.execute(text(
+            "ALTER TABLE shares ADD COLUMN IF NOT EXISTS user_id BIGINT "
+            "REFERENCES users(id) ON DELETE CASCADE"
+        ))
+        conn.execute(text(
+            "ALTER TABLE locations DROP CONSTRAINT IF EXISTS locations_t_lat_lng_key"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS locations_user_t_lat_lng_key "
+            "ON locations (user_id, t, lat, lng) NULLS NOT DISTINCT"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS locations_user_t_idx ON locations (user_id, t)"
+        ))
+
+
 def init_database() -> None:
     """Ensure the database exists and every table is present and current."""
     _create_database_if_missing()
     _migrate_legacy_locations()
     Base.metadata.create_all(engine)
+    _migrate_user_scoping()
     _enable_spatial()

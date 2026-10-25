@@ -1,38 +1,48 @@
 #!/usr/bin/env python3
 """Tag Trace collector — command-line entrypoint.
 
-Fetches your JioTag 2's locations from Google's Find Hub network on a timer,
-stores them in Postgres (via SQLAlchemy), and serves them to the Android app
-and the React web UI over your home network.
+Fetches each user's Find Hub tag locations on a timer, stores them in
+Postgres (via SQLAlchemy), and serves them to the Android app and the React
+web UI.
+
+Each signed-in user configures their own tag (see ``tag_configs``); the
+collector runs one isolated worker process per completed configuration and
+starts/stops workers as users finish setup, reset, or lose their Google login.
 
 Configuration comes from the environment / a local ``.env`` file — see
 ``.env.example``. Command-line flags override the configured defaults.
 
     python3 collector.py                       # use .env for everything
-    python3 collector.py --tag Tag --interval 300 --port 8020
+    python3 collector.py --interval 300 --port 8020
     python3 collector.py --add-user you@example.com --password 'secret'
+    python3 collector.py --generate-key        # value for TAG_CREDENTIALS_KEY
 
 This is a thin wrapper around GoogleFindMyTools (GPL-3.0), which does the
-actual Google sign-in and decryption. Keep this file inside a checkout of that
-repo, or point GFMT_DIR at one.
+actual Google sign-in and decryption.
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime as dt
+import multiprocessing as mp
 import threading
 import time
 
 from config import get_settings
 from db import init_database
 
-_poll_lock = threading.Lock()
+# Seconds between checks for new / reset / failed tag configurations.
+_SUPERVISE_EVERY = 15
+# Wait before restarting a worker that exited (e.g. crash), per config.
+_RESTART_BACKOFF = 60
 
 
 def _parse_args(settings) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tag Trace collector (SQLAlchemy)")
-    parser.add_argument("--tag", default=settings.tag_name, help="part of the tag's name")
+    parser.add_argument(
+        "--tag", default=settings.tag_name,
+        help="legacy import only: part of the tag's name in secrets.json's account",
+    )
     parser.add_argument(
         "--interval", type=int, default=settings.poll_interval,
         help="seconds between fetches",
@@ -47,30 +57,65 @@ def _parse_args(settings) -> argparse.Namespace:
         "--add-user", metavar="EMAIL", help="create/reset a login user, then exit"
     )
     parser.add_argument("--password", help="password for --add-user")
+    parser.add_argument(
+        "--generate-key", action="store_true",
+        help="print a new TAG_CREDENTIALS_KEY, then exit",
+    )
     return parser.parse_args()
 
 
-def _poll_loop(interval: int, canonic_id: str, name: str) -> None:
-    """Fetch, store, and report new points forever, surviving transient errors."""
-    import findhub  # imported lazily so --add-user works without GFMT on the path
-    import repository
+def _supervise(interval: int) -> None:
+    """Keep exactly one worker process alive per completed tag configuration."""
+    import tag_configs
+    import worker
 
+    ctx = mp.get_context("spawn")
+    running: dict[int, mp.Process] = {}
+    exited_at: dict[int, float] = {}
     while True:
         try:
-            new_points = findhub.collect_points(canonic_id, name)
-            with _poll_lock:
-                added = repository.insert_points(new_points, name)
-                total = repository.total_points()
-            stamp = dt.datetime.now().strftime("%H:%M:%S")
-            print(f"[{stamp}] fetched {len(new_points)}, {added} new, {total} total")
-        except Exception as exc:  # keep polling across transient failures
-            print(f"[poll] error: {exc}")
-        time.sleep(interval)
+            wanted = {c["id"]: c for c in tag_configs.completed_configs()}
+        except Exception as exc:  # DB hiccup: keep current workers, retry
+            print(f"[supervisor] can't read tag configs: {exc}")
+            wanted = None
+
+        if wanted is not None:
+            for config_id in list(running):
+                proc = running[config_id]
+                if config_id not in wanted:  # reset, replaced, or failed
+                    if proc.is_alive():
+                        proc.terminate()
+                    proc.join(5)
+                    del running[config_id]
+                    print(f"[supervisor] stopped worker for tag config {config_id}")
+                elif not proc.is_alive():
+                    del running[config_id]
+                    exited_at[config_id] = time.monotonic()
+
+            for config_id, config in wanted.items():
+                if config_id in running:
+                    continue
+                if time.monotonic() - exited_at.get(config_id, -1e9) < _RESTART_BACKOFF:
+                    continue
+                proc = ctx.Process(
+                    target=worker.run_worker, args=(config_id, interval), daemon=True
+                )
+                proc.start()
+                running[config_id] = proc
+                print(f"[supervisor] started worker for user {config['user_id']} "
+                      f"({config['tag_name']!r})")
+        time.sleep(_SUPERVISE_EVERY)
 
 
 def main() -> None:
     settings = get_settings()
     args = _parse_args(settings)
+
+    if args.generate_key:
+        from crypto import generate_key
+
+        print(generate_key())
+        return
 
     init_database()
 
@@ -83,21 +128,23 @@ def main() -> None:
         print(f"[auth] user {args.add_user.strip().lower()!r} ready")
         return
 
-    import findhub
     import repository
+    import tag_configs
+    from crypto import CredentialKeyError, _fernet
+
+    try:
+        _fernet()  # fail fast: per-user credentials can't be stored without it
+    except CredentialKeyError as exc:
+        raise SystemExit(f"[config] {exc}")
 
     print(f"[db] connected, {repository.total_points()} points stored")
+    tag_configs.import_legacy(args.tag)
 
-    name, canonic_id = findhub.find_canonic_id(args.tag)
-    print(f"Tracking {name!r} every {args.interval}s")
-
-    poller = threading.Thread(
-        target=_poll_loop, args=(args.interval, canonic_id, name), daemon=True
-    )
-    poller.start()
+    supervisor = threading.Thread(target=_supervise, args=(args.interval,), daemon=True)
+    supervisor.start()
 
     if args.no_serve:
-        poller.join()
+        supervisor.join()
         return
 
     from http.server import ThreadingHTTPServer
@@ -107,7 +154,7 @@ def main() -> None:
     server = ThreadingHTTPServer((settings.http_host, args.port), make_handler())
     print(
         f"Serving http://{settings.http_host}:{args.port}  "
-        "(/login, /locations, /days, /shares, /shared, /health)  Ctrl-C to stop"
+        "(/login, /tag, /locations, /days, /shares, /shared, /health)  Ctrl-C to stop"
     )
     try:
         server.serve_forever()

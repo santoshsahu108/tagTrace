@@ -314,7 +314,7 @@ function Login({ onLogin }) {
       if (r.status === 401) { setErr('Wrong email or password.'); return }
       if (!r.ok) { setErr(`Login failed (${r.status}).`); return }
       const j = await r.json()
-      onLogin(j.token, j.email)
+      onLogin(j.token, j.email, j.tag_setup)
     } catch {
       setErr(`Can't reach the collector at ${API}. Is it running, and are you on the same Wi-Fi?`)
     } finally {
@@ -340,6 +340,118 @@ function Login({ onLogin }) {
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
+    </div>
+  )
+}
+
+// --- Tag setup -------------------------------------------------------------
+// Each user connects their own Find Hub tag. "Connect with Google" makes the
+// collector open Chrome on the computer it runs on; the user signs in there and
+// the keys go straight into the database. This page polls /tag for progress.
+function TagSetup({ token, setup, onDone, onLogout, email }) {
+  const [status, setStatus] = useState(setup || { status: 'none' })
+  const [choice, setChoice] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const connect = status.connect || null
+  const connecting = !!(connect && connect.running)
+  const pending = status.status === 'pending' && !connecting
+  const devices = status.devices || []
+
+  async function call(method, path, body) {
+    const r = await fetch(`${API}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (r.status === 401) { onLogout(); throw new Error('unauthorized') }
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`)
+    return j
+  }
+
+  async function run(fn) {
+    setBusy(true); setErr('')
+    try { await fn() } catch (e) {
+      if (e.message !== 'unauthorized') setErr(e.message === 'Failed to fetch' ? `Can't reach the collector at ${API}.` : e.message)
+    } finally { setBusy(false) }
+  }
+
+  // Poll while Chrome sign-in is in progress.
+  useEffect(() => {
+    if (!connecting) return
+    const id = setInterval(async () => {
+      try {
+        const j = await call('GET', '/tag')
+        setStatus(j)
+        if (j.status === 'pending' && (j.devices || []).length === 1) setChoice(j.devices[0].id)
+      } catch { /* keep polling */ }
+    }, 2000)
+    return () => clearInterval(id)
+  }, [connecting])
+
+  const start = () => run(async () => {
+    setStatus(await call('POST', '/tag/connect', { replace: status.status === 'completed' }))
+  })
+  const select = () => run(async () => {
+    const j = await call('POST', '/tag/select', { tag_id: choice })
+    setStatus(j); onDone(j)
+  })
+
+  const lastError = (connect && connect.error) || (status.status === 'failed' && status.last_error)
+
+  return (
+    <div className="login">
+      <div className="login-card setup-card">
+        <h1>Connect your tag</h1>
+        <p className="sub">{email ? `${email} · ` : ''}one-time setup</p>
+
+        {connecting && (
+          <div className="setup-progress">
+            <div className="spinner" />
+            <div>
+              <strong>Waiting for Google sign-in</strong>
+              <p className="hint">{connect.message}</p>
+              <p className="hint">Chrome opens on the computer running the collector. Finish the steps there; this page updates by itself.</p>
+            </div>
+          </div>
+        )}
+
+        {!connecting && !pending && (
+          <>
+            {lastError && <div className="login-err">{lastError}</div>}
+            <p className="hint">Sign in with the Google account that owns your tag. Chrome will open on the computer running the collector, and you'll sign in twice: once to your account, then to unlock your encrypted data with your phone's screen lock.</p>
+            {err && <div className="login-err">{err}</div>}
+            <button className="login-btn" onClick={start} disabled={busy}>
+              {busy ? 'Starting…' : lastError ? 'Try again' : 'Connect with Google'}
+            </button>
+          </>
+        )}
+
+        {pending && (
+          <>
+            <p className="sub" style={{ margin: 0 }}>
+              Connected{status.google_email ? ` as ${status.google_email}` : ''}. Pick the tracker to follow:
+            </p>
+            <div className="device-list">
+              {devices.map((d) => (
+                <label key={d.id} className="device">
+                  <input type="radio" name="device" value={d.id} checked={choice === d.id}
+                    onChange={() => setChoice(d.id)} />
+                  {d.name || 'Unnamed device'}
+                </label>
+              ))}
+            </div>
+            {err && <div className="login-err">{err}</div>}
+            <button className="login-btn" onClick={select} disabled={busy || !choice}>
+              {busy ? 'Saving…' : 'Use this tracker'}
+            </button>
+            <button className="link-btn" onClick={start} disabled={busy}>Connect a different Google account</button>
+          </>
+        )}
+        <button className="link-btn" onClick={onLogout}>Log out</button>
+      </div>
     </div>
   )
 }
@@ -493,21 +605,30 @@ export default function App() {
   const shareToken = useMemo(() => new URLSearchParams(location.search).get('share') || '', [])
   const [token, setToken] = useState(getToken())
   const [email, setEmail] = useState('')
+  const [tagSetup, setTagSetup] = useState(null) // from /login or /me
 
-  function onLogin(tok, mail) { setStoredToken(tok); setEmail(mail || ''); setToken(tok) }
+  function onLogin(tok, mail, setup) {
+    setStoredToken(tok); setEmail(mail || ''); setToken(tok)
+    if (setup) setTagSetup(setup)
+  }
   function onLogout() {
     const t = token
-    setStoredToken(''); setToken(''); setEmail('')
+    setStoredToken(''); setToken(''); setEmail(''); setTagSetup(null)
     if (t) { try { fetch(`${API}/logout`, { method: 'POST', headers: { Authorization: `Bearer ${t}` } }) } catch { /* ignore */ } }
   }
 
   // A share link is public: show the shared view without requiring login.
   if (shareToken) return <SharedView shareToken={shareToken} />
   if (!token) return <Login onLogin={onLogin} />
-  return <Dashboard token={token} email={email} onLogin={onLogin} onLogout={onLogout} />
+  if (tagSetup && tagSetup.setup_required) {
+    return <TagSetup token={token} setup={tagSetup} email={email} onLogout={onLogout}
+      onDone={(s) => setTagSetup(s)} />
+  }
+  return <Dashboard token={token} email={email} tagSetup={tagSetup} onLogin={onLogin}
+    onLogout={onLogout} onSetup={setTagSetup} />
 }
 
-function Dashboard({ token, email, onLogin, onLogout }) {
+function Dashboard({ token, email, tagSetup, onLogin, onLogout, onSetup }) {
   const [date, setDate] = useState(todayStr())
   const [days, setDays] = useState([])
   const [raw, setRaw] = useState([])
@@ -553,10 +674,18 @@ function Dashboard({ token, email, onLogin, onLogout }) {
       try {
         const r = await authFetch('/me')
         const j = await r.json()
-        if (j.email) onLogin(token, j.email)
+        if (j.email) onLogin(token, j.email, j.tag_setup)
       } catch { /* 401 already logged out */ }
     })()
   }, [])
+
+  async function reconnect() {
+    if (!confirm('Disconnect this tag and set up a different one? Your saved trace stays.')) return
+    try {
+      const r = await fetch(`${API}/tag/reset`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      if (r.ok) onSetup(await r.json())
+    } catch { /* collector unreachable; nothing changed */ }
+  }
 
   useEffect(() => { loadDays() }, [])
   useEffect(() => { loadPoints(date) }, [date])
@@ -577,6 +706,8 @@ function Dashboard({ token, email, onLogin, onLogout }) {
         <button onClick={() => { loadDays(); loadPoints(date) }}>Refresh</button>
         <button onClick={() => setShareOpen(true)}>Share</button>
         <span className="spacer" />
+        {tagSetup && tagSetup.tag_name && <span className="whoami">Tag: {tagSetup.tag_name}</span>}
+        <button onClick={reconnect}>Reconnect tag</button>
         {email && <span className="whoami">{email}</span>}
         <button onClick={onLogout}>Log out</button>
       </header>

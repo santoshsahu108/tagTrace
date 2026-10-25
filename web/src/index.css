@@ -288,3 +288,24 @@ header .whoami { color: var(--muted); font-size: 13px; }
   .main { flex-direction: column; }
   aside { width: auto; max-height: 38%; border-left: none; border-top: 1px solid var(--border); }
 }
+
+/* --- Tag setup ------------------------------------------------------------ */
+.setup-card { width: min(460px, 100%); }
+.setup-card .hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.setup-progress { display: flex; gap: 12px; align-items: flex-start; }
+.setup-progress strong { font-size: 14px; }
+.setup-progress .hint { margin-top: 4px; }
+.spinner {
+  flex: none; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.device-list { display: flex; flex-direction: column; gap: 6px; }
+.device { flex-direction: row !important; align-items: center; gap: 8px; cursor: pointer; }
+.device input { width: auto !important; margin: 0; }
+.link-btn {
+  background: none; border: none; color: var(--muted); font-size: 13px;
+  cursor: pointer; padding: 4px 0; text-decoration: underline;
+}
+.link-btn:disabled { opacity: 0.55; cursor: default; }

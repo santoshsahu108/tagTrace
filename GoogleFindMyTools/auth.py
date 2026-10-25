@@ -75,6 +75,21 @@ def login(email: str | None, password: str | None) -> str | None:
         return token
 
 
+def session_user(token: str | None) -> tuple[int, str] | None:
+    """``(user_id, email)`` for a live (unexpired) session token, else None."""
+    if not token:
+        return None
+    now = dt.datetime.now(dt.timezone.utc)
+    stmt = (
+        select(User.id, User.email)
+        .join(Session, Session.user_id == User.id)
+        .where(Session.token == token, Session.expires_at > now)
+    )
+    with session_scope() as session:
+        row = session.execute(stmt).first()
+        return (row[0], row[1]) if row else None
+
+
 def session_email(token: str | None) -> str | None:
     """Email for a live (unexpired) session token, else None."""
     if not token:

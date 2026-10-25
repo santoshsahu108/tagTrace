@@ -123,6 +123,10 @@ def _decode_update(update) -> list[dict]:
                 "src": "own"
                 if enc.isOwnReport
                 else _STATUS_NAMES.get(loc.status, ""),
+                # Extra detail for logging only (not stored).
+                "alt": proto.altitude,
+                "status": int(loc.status),
+                "own": bool(enc.isOwnReport),
             }
         )
     return points

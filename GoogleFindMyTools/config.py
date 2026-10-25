@@ -64,6 +64,15 @@ class Settings:
     # Path to the GoogleFindMyTools checkout (defaults to this file's dir).
     gfmt_dir: str
 
+    # --- Per-user tags --------------------------------------------------- #
+    # Fernet key that encrypts each user's Google credentials at rest.
+    tag_credentials_key: str
+    # Email of the user who inherits the legacy single-tag setup (secrets.json
+    # + existing points) on first start. Empty = no automatic import.
+    legacy_tag_owner: str
+    # Seconds to wait for Google while validating an uploaded setup.
+    setup_timeout: int
+
     @property
     def sqlalchemy_url(self) -> str:
         """The SQLAlchemy URL for the application database."""
@@ -111,4 +120,7 @@ def get_settings() -> Settings:
         http_port=_int("HTTP_PORT", 8020),
         session_ttl_days=_int("SESSION_TTL_DAYS", 7),
         gfmt_dir=os.environ.get("GFMT_DIR", "").strip() or here,
+        tag_credentials_key=os.environ.get("TAG_CREDENTIALS_KEY", "").strip(),
+        legacy_tag_owner=os.environ.get("LEGACY_TAG_OWNER", "").strip().lower(),
+        setup_timeout=_int("SETUP_TIMEOUT", 90),
     )

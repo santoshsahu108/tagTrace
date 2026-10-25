@@ -8,6 +8,19 @@ import os
 
 SECRETS_FILE = 'secrets.json'
 
+# Optional in-memory credential store. When set (via use_memory_store), all
+# reads and writes go here instead of secrets.json, so a process can run with
+# one user's credentials loaded from the database without touching disk.
+_memory_store = None
+_on_change = None
+
+
+def use_memory_store(data: dict, on_change: callable = None):
+    """Serve credentials from ``data``; call ``on_change(data)`` after writes."""
+    global _memory_store, _on_change
+    _memory_store = data
+    _on_change = on_change
+
 def get_cached_value_or_set(name: str, generator: callable):
 
     existing_value = get_cached_value(name)
@@ -21,6 +34,9 @@ def get_cached_value_or_set(name: str, generator: callable):
 
 
 def get_cached_value(name: str):
+    if _memory_store is not None:
+        return _memory_store.get(name) or None
+
     secrets_file = _get_secrets_file()
 
     if os.path.exists(secrets_file):
@@ -36,6 +52,12 @@ def get_cached_value(name: str):
 
 
 def set_cached_value(name: str, value: str):
+    if _memory_store is not None:
+        _memory_store[name] = value
+        if _on_change is not None:
+            _on_change(_memory_store)
+        return
+
     secrets_file = _get_secrets_file()
 
     if os.path.exists(secrets_file):
