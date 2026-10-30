@@ -16,6 +16,7 @@ Configuration comes from the environment / a local ``.env`` file — see
     python3 collector.py --interval 300 --port 8020
     python3 collector.py --add-user you@example.com --password 'secret'
     python3 collector.py --generate-key        # value for TAG_CREDENTIALS_KEY
+    python3 collector.py --setup-only          # web/API for Connect with Google only
 
 This is a thin wrapper around GoogleFindMyTools (GPL-3.0), which does the
 actual Google sign-in and decryption.
@@ -57,6 +58,11 @@ def _parse_args(settings) -> argparse.Namespace:
         "--add-user", metavar="EMAIL", help="create/reset a login user, then exit"
     )
     parser.add_argument("--password", help="password for --add-user")
+    parser.add_argument(
+        "--setup-only", action="store_true",
+        help="serve the API for tag setup only: no tracking, no legacy import "
+        "(run on a computer with Chrome while production tracks elsewhere)",
+    )
     parser.add_argument(
         "--generate-key", action="store_true",
         help="print a new TAG_CREDENTIALS_KEY, then exit",
@@ -138,14 +144,21 @@ def main() -> None:
         raise SystemExit(f"[config] {exc}")
 
     print(f"[db] connected, {repository.total_points()} points stored")
-    tag_configs.import_legacy(args.tag)
+    if args.setup_only:
+        # Production polls elsewhere against the same database; this instance
+        # only hosts Connect with Google, so it must not start any worker.
+        print("[setup-only] tracking is off here; finished setups are picked "
+              "up by the collector running elsewhere")
+    else:
+        tag_configs.import_legacy(args.tag)
+        supervisor = threading.Thread(
+            target=_supervise, args=(args.interval,), daemon=True
+        )
+        supervisor.start()
 
-    supervisor = threading.Thread(target=_supervise, args=(args.interval,), daemon=True)
-    supervisor.start()
-
-    if args.no_serve:
-        supervisor.join()
-        return
+        if args.no_serve:
+            supervisor.join()
+            return
 
     from http.server import ThreadingHTTPServer
 

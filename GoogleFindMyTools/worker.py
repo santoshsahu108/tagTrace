@@ -13,6 +13,12 @@ import time
 
 from tag_provider import classify_error
 
+# After this many polls in a row with no FCM answer, exit so the supervisor
+# starts a fresh process. The FCM push client gives up for good after a few
+# connection errors (network drop, sleep), and from then on every poll times
+# out; a new process opens a new FCM connection.
+_MAX_FCM_TIMEOUTS = 3
+
 
 def _print_points(prefix: str, points: list[dict]) -> None:
     """Print every field of each fetched point, oldest first."""
@@ -45,6 +51,7 @@ def run_worker(config_id: int, interval: int) -> None:
     import repository
 
     print(f"{prefix} tracking {config['tag_name']!r} every {interval}s", flush=True)
+    timeouts = 0
     while True:
         try:
             points = findhub.collect_points(config["tag_id"], config["tag_name"])
@@ -56,6 +63,14 @@ def run_worker(config_id: int, interval: int) -> None:
             print(f"{prefix} [{stamp}] fetched {len(points)}, {added} new, "
                   f"{total} total", flush=True)
             _print_points(prefix, points)
+            timeouts = 0
+        except TimeoutError as exc:
+            timeouts += 1
+            print(f"{prefix} [poll] {exc} ({timeouts}/{_MAX_FCM_TIMEOUTS})", flush=True)
+            if timeouts >= _MAX_FCM_TIMEOUTS:
+                print(f"{prefix} FCM connection looks dead; restarting worker",
+                      flush=True)
+                return
         except Exception as exc:
             code, message = classify_error(exc)
             if code == "invalid_credentials":

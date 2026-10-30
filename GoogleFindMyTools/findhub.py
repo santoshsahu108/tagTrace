@@ -17,9 +17,10 @@ from config import get_settings
 
 # Python 3.14's stricter asyncio SSL raises noisy but harmless errors when the
 # FCM push connection is torn down between fetches (APPLICATION_DATA_AFTER_
-# CLOSE_NOTIFY). The client reconnects on its own, so quiet the teardown traces.
+# CLOSE_NOTIFY). The client reconnects on its own, so quiet the teardown traces,
+# but keep ERROR so "Shutting down push receiver" (FCM gave up) still shows.
 for _name in ("Auth.firebase_messaging", "Auth.firebase_messaging.fcmpushclient"):
-    logging.getLogger(_name).setLevel(logging.CRITICAL)
+    logging.getLogger(_name).setLevel(logging.ERROR)
 
 # Make the GoogleFindMyTools checkout importable before pulling its modules in.
 sys.path.insert(0, get_settings().gfmt_dir)
